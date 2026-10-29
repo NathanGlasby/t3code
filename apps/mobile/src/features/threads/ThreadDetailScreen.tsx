@@ -160,7 +160,10 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { orchestrationEnvironment } from "../../state/orchestration";
 import { useDelayedStatus } from "../../lib/useDelayedStatus";
 import type { PendingUserInputDraftAnswer } from "@t3tools/client-runtime/state/pending-user-input";
-import type { RunStopPresentation } from "@t3tools/client-runtime/state/thread-execution";
+import {
+  quietRunSince,
+  type RunStopPresentation,
+} from "@t3tools/client-runtime/state/thread-execution";
 import type {
   PendingApproval,
   PendingUserInput,
@@ -550,6 +553,12 @@ function ThreadDetailBody(props: ThreadDetailScreenProps) {
   const canForceStop =
     useAtomValue(orchestrationEnvironment.forceStopThread.permissionAtom(props.environmentId)) &&
     props.serverConfig?.environment.capabilities.threadForceStop === true;
+  // The quiet run itself, not the latest one: a queued follow-up can be newer.
+  const quietRunId = props.selectedThread.runtime?.activeRunId ?? undefined;
+  const quietSince =
+    props.activeWorkStartedAt === null
+      ? null
+      : quietRunSince(props.serverConfig, props.selectedThread.id);
   const [forceStoppingKey, setForceStoppingKey] = useState<string | null>(null);
   // The run that ignored Stop, so a confirmation left open cannot hit a newer run.
   const forceStop = async (runId: RunId | undefined) => {
@@ -720,6 +729,45 @@ function ThreadDetailBody(props: ThreadDetailScreenProps) {
         onPress: () => {
           Keyboard.dismiss();
           openLinkedThread({ environmentId: props.environmentId, threadId: childInput.id });
+        },
+      };
+    }
+    if (quietSince !== null && contentPresentationKind === "ready") {
+      return {
+        kind: "quiet",
+        quietSince,
+        action: {
+          label: statusPending ? "Stopping..." : "Stop",
+          accessibilityLabel: "Stop the quiet turn",
+          disabled: !props.canOperateThread || statusPending,
+          onPress: () =>
+            Dialog.alert(
+              "Stop this turn?",
+              "The agent has sent nothing for a while. A long tool may still be running.",
+              [
+                { text: "Cancel", style: "cancel" },
+                {
+                  text: "Stop",
+                  onPress: () =>
+                    void interruptThreadTurn({
+                      environmentId: props.environmentId,
+                      input:
+                        quietRunId === undefined
+                          ? { threadId: props.selectedThread.id }
+                          : { threadId: props.selectedThread.id, runId: quietRunId },
+                    }),
+                },
+                ...(canForceStop
+                  ? [
+                      {
+                        text: "Force stop",
+                        style: "destructive" as const,
+                        onPress: () => void forceStop(quietRunId),
+                      },
+                    ]
+                  : []),
+              ],
+            ),
         },
       };
     }
